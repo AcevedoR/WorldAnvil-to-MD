@@ -189,17 +189,20 @@ try:
                     data = json.load(f)
 
                 # Extracting data to use as yaml metadata in the Obsidian document
+                subtype = data.get("type", "")
+                if isinstance(subtype, dict):
+                    subtype = subtype.get("title", "")
                 yaml_data = {
-                    "templateType": data.get("templateType", ""),
-                    "dataType": data.get("type", ""),
+                    "type": data.get("templateType", ""),
                 }
+                if subtype:
+                    yaml_data["subtype"]=subtype
 
                 # This creates a subfolder based on the template
-                template = yaml_data.get("template", "other")
-                create_parent_directory(f"{destination_directory}/{template}/")
+                create_parent_directory(f"{destination_directory}/")
 
                 # Create a Markdown file in the destination directory.
-                markdown_filename = os.path.join(destination_directory, template, data.get("title")+ '.md')
+                markdown_filename = os.path.join(destination_directory, data.get("title")+ '.md')
                 with open(markdown_filename, 'w') as markdown_file:
 
                     # Writing the metadata yaml
