@@ -1,5 +1,7 @@
 import os
 import json
+import traceback
+
 import requests
 import re
 import yaml
@@ -11,36 +13,58 @@ DEBUG = False
 
 source_directory = 'World-Anvil-Export' # should point at the local folder with your world anvil exports
 destination_directory = 'World-Anvil-Output' # where you want the formatted files and folders to end up
-obsidian_resource_folder = 'images'
+obsidian_resource_folder ='images'
 
 attempt_bbcode = True
 
 # Define the list of tags you want to extract for the main content. Usually the default is what you want
-content_tags_to_extract = [
-    'title',
-    'content',
+content_tags_to_skip = [
+    'id',
+    'slug',
+    'state',
+    'entityClass',
+    'icon',
+    'url',
+    'folderId',
+    'templateType',
+    'author',
+    'world',
+    'updateDate',
+    'creationDate',
+    'publicationDate',
+    'cover',
+    'portrait',
+    'editURL',
+    'ancestry',
+    'publicationDate',
+    'coverSource',
+    'type',
 ]
 
 os.makedirs(destination_directory, exist_ok=True)
 
-def download_image(url, filename):
+def download_image(url, image_filename):
     if not url:
         if DEBUG:
-            print(f"No URL provided for image: {filename}")
+            print(f"No URL provided for image: {image_filename}")
         return
     if DEBUG: print(url)
     try:
         response = requests.get(url)
         if response.status_code == 200:
-            if not filename.lower().endswith((".png", ".jpeg", ".jpg")): # I had one case where an image didn't get an extension .. never seen it again
-                filename = filename + ".png" # Hoping and guessing its a png, i'll read bytes later
-            with open(f'{obsidian_resource_folder}/{filename}', 'wb') as f:
+            if not image_filename.lower().endswith((".png", ".jpeg", ".jpg")): # I had one case where an image didn't get an extension .. never seen it again
+                image_filename = image_filename + ".png" # Hoping and guessing its a png, i'll read bytes later
+            with open(f'{obsidian_resource_folder}/{image_filename}', 'wb') as f:
                 f.write(response.content)
                 # Loading bar for downloading images... do we want this?
                 #for chunk in tqdm(response.iter_content(chunk_size=1024), total=(int(response.headers.get('content-length', 0)) // 1024) + 1, unit='KB'):
                 #    f.write(chunk)
+            return image_filename
+        else:
+            raise f"http error: {response}"
     except Exception as e:
-        print(f"Failed to download or save image {filename}. Error: {e}")
+        print(f"Failed to download or save image {image_filename}. Error: {e}")
+        traceback.print_exc()
 
 # Function for extracting the extra sections if they are above 10 length,
 # this is sections like the scrapbook, geography, etc.
@@ -55,30 +79,58 @@ def extract_sections(data, markdown_file):
                 markdown_file.write(f"\n## {section_key}\n\n{section_content}\n")
 
 def extract_relations(data, markdown_file):
-    relations = data.get("relations", {})
-    for relation_key, relation_data in relations.items():
-        if isinstance(relation_data, dict) and "items" in relation_data:
-            content = ''
-            if isinstance(relation_data["items"], list):
-                for item in relation_data["items"]:
-                    if item["relationshipType"] == "article":
-                        content = content + '[[' + item["title"] + ']]\n'
-                    else:
-                        content = content + item["title"] + '\n'
-            else:
-                content = "[[" + relation_data["items"]["title"] + "]]"
-            markdown_file.write(f"\n## {relation_key}\n\n{content}\n")
+    relations = data.get("relations", None)
+    if not relations:
+        return
+    if isinstance(relations, str):
+        markdown_file.write(f"\n## relations\n\n{relations}\n")
+    else:
+        for relation_key, relation_data in relations.items():
+            if isinstance(relation_data, dict) and "items" in relation_data:
+                content = ''
+                if isinstance(relation_data["items"], list):
+                    for item in relation_data["items"]:
+                        if item["relationshipType"] == "article":
+                            content = content + '[[' + item["title"] + ']]\n'
+                        else:
+                            content = content + item["title"] + '\n'
+                else:
+                    content = "[[" + relation_data["items"]["title"] + "]]"
+                markdown_file.write(f"\n## {relation_key}\n\n{content}\n")
+
+def extract_image(image_tag):
+    # Download the image referenced by "cover[url]" with the name from "cover[title]".
+    try:
+        if data.get(image_tag, {}):
+            image_url = data.get(image_tag, {}).get("url", "")
+            image_title = data.get(image_tag, {}).get("title", "")
+            image_filename = download_image(image_url, image_title)
+            markdown_file.write(f"\n# {image_tag}\n\n![[{os.path.join(obsidian_resource_folder, image_filename)}]]\n\n")
+    except:
+        print(f"No image for {filename}")
+        traceback.print_exc()
 
 
+def extract_most_simple_sections(link_section_name):
+    link_section = data.get(link_section_name, {})
+    if link_section:
+        if isinstance(link_section, str):
+            markdown_file.write(f"\n## {link_section_name}\n\n{format_content(link_section)}\n\n")
+        elif isinstance(link_section, list):
+            markdown_file.write(f"\n## {link_section_name}\n\n")
+            for link in link_section:
+                markdown_file.write(f"[[{link.get('title')}]]\n")
+            markdown_file.write(f"\n")
+        elif isinstance(link_section, dict):
+            markdown_file.write(f"\n## {link_section_name}\n\n[[{link_section.get('title')}]]\n\n")
 
 def create_parent_directory(file_path):
     parent_directory = os.path.dirname(file_path)
     os.makedirs(parent_directory, exist_ok=True)
 
-def format_content(content):
-    if not content:
+def format_content(text):
+    if not text:
         return ""
-    text = content['text']
     if not isinstance(text, str):
         return str(text)
 
@@ -138,9 +190,8 @@ try:
 
                 # Extracting data to use as yaml metadata in the Obsidian document
                 yaml_data = {
-                    "creationDate": data.get("creationDate", {}).get("date", ""),
-                    "template": data.get("template", ""),
-                    "world": data.get("world", {}).get("title", ""),
+                    "templateType": data.get("templateType", ""),
+                    "dataType": data.get("type", ""),
                 }
 
                 # This creates a subfolder based on the template
@@ -148,41 +199,32 @@ try:
                 create_parent_directory(f"{destination_directory}/{template}/")
 
                 # Create a Markdown file in the destination directory.
-                markdown_filename = os.path.join(destination_directory, template, os.path.splitext(filename)[0] + '.md')
+                markdown_filename = os.path.join(destination_directory, template, data.get("title")+ '.md')
                 with open(markdown_filename, 'w') as markdown_file:
-                    
-                    # Download the image referenced by "cover[url]" with the name from "cover[title]".
-                    try:
-                        cover_url = data.get("cover", {}).get("url", "")
-                        cover_title = data.get("cover", {}).get("title", "")
-                        hasImage = True
-                    except:
-                        if DEBUG: print(f"No image for {filename}")
-                        hasImage = False
-
-                    if hasImage == True:
-                        download_image(cover_url, cover_title)
 
                     # Writing the metadata yaml
                     markdown_file.write('---\n')
                     yaml.dump(yaml_data, markdown_file, default_style='', default_flow_style=False)
                     markdown_file.write('---\n')
 
-                    if hasImage:
-                        markdown_file.write(f'![[{cover_title}]]\n\n')
+                    if data.get("coverSource", "") != "World":
+                        extract_image("cover")
+                    extract_image("portrait")
+                    extract_image("flag")
 
                     # Writing the main content
-                    for tag in content_tags_to_extract:
+                    for tag in data:
                         value = data.get(tag, '')
-                        if tag == 'content':
-                            formatted_content = format_content({'text': value})
-                            markdown_file.write(f"{formatted_content}\n\n")
-                        elif value:
-                            tag.capitalize
-                            markdown_file.write(f"# {tag.capitalize()}: {value}\n\n") # This creates a L1 header based on the filename
+                        if tag not in content_tags_to_skip:
+                            if tag == 'content':
+                                formatted_content = format_content(value)
+                                markdown_file.write(f"{formatted_content}\n\n")
+                            elif value and tag == 'title':
+                                tag.capitalize
+                                markdown_file.write(f"# {tag.capitalize()}: {value}\n\n") # This creates a L1 header based on the filename
+                            else:
+                                extract_most_simple_sections(tag)
 
-                    markdown_file.write("# Extras\n\n") # Change this if you want to change the extras L1 header
-                    
                     # Extract extra sections, create L2 headers and put their content below
                     extract_sections(data, markdown_file)
                     extract_relations(data, markdown_file)
@@ -191,6 +233,7 @@ try:
 
 except Exception as e:
     print(f"Failed to convert. Error: {e}")
+    traceback.print_exc()
 
 finally:
     progress_bar.close()
